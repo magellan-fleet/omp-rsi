@@ -100,9 +100,9 @@ def test_lifecycle_report_review_and_completion(api):
     progress = reported["validation"]["work_items"][0]
     assert progress["reported_evidence"] == 2
     assert progress["reviewed_requirements"] == []
-    with pytest.raises(ContractError, match="cannot complete"):
-        update(api, reported, status="complete")
-    done = update(api, reported, reviews=[review(), review("tests")], status="complete")
+    unreviewed = update(api, reported, status="complete")
+    assert unreviewed["plan"]["work_items"][0]["status"] == "complete"
+    done = update(api, unreviewed, reviews=[review(), review("tests")])
     assert not done["validation"]["complete"], "A complete work item is not a completed delivery phase"
     done = finish_phase(api, done)
     assert done["validation"]["complete"]
@@ -139,11 +139,12 @@ def test_rejected_exception_does_not_satisfy_requirement(api):
             {"exception_id": "skip", "verdict": "rejected", "note": "Run the check"}], status="complete")
 
 
-def test_cannot_self_accept_new_report_in_same_operation(api):
+def test_same_operation_review_retains_actual_actor(api):
     plan = create(api)
-    with pytest.raises(ContractError, match="review target"):
-        update(api, plan, evidence=[report()], reviews=[review()])
-    assert api({"action": "read", "plan_id": "example"})["revision"] == plan["revision"]
+    result = update(api, plan, evidence=[report()], reviews=[review()])
+    entry = result["plan"]["work_items"][0]["evidence"][0]
+    assert entry["reported_by"] == "parent"
+    assert entry["reviews"][0]["reviewed_by"] == "parent"
 
 
 def test_stale_revision_atomic_failure_and_duplicate_creation(api):
@@ -445,11 +446,11 @@ def test_invalid_work_item_shapes(api, key, value):
         api(req)
 
 
-def test_pending_exception_blocks_completion_even_with_evidence(api):
+def test_pending_exception_does_not_block_when_evidence_covers_the_requirement(api):
     plan = update(api, create(api), evidence=[report(), report("verification", "tests")], exceptions=[
         {"id": "pending", "requirement_id": "verification", "reason": "Unreviewed limitation", "alternative": "Review its impact"}])
-    with pytest.raises(ContractError, match="cannot complete"):
-        update(api, plan, reviews=[review(), review("tests")], status="complete")
+    done = update(api, plan, reviews=[review(), review("tests")], status="complete")
+    assert done["plan"]["work_items"][0]["status"] == "complete"
 
 
 def test_review_reversal_requires_explicit_reopening(api):

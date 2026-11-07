@@ -378,7 +378,7 @@ def validate_plan(plan):
         progress.append(detail)
     if schema == 2:
         _validate_timeline(plan)
-    complete = all(i["status"] == "complete" for i in plan["work_items"])
+    complete = all(i["status"] == "complete" for i in plan["work_items"]) and (schema == 1 or plan["phase"] == "complete")
     return {"valid": True, "complete": complete, "direction": direction, "work_items": progress}
 
 
