@@ -611,6 +611,8 @@ def test_steering_reopens_outcome_and_keeps_prior_evidence_as_history(api):
     assert plan["plan"]["work_items"][0]["status"] == "in_progress"
     assert set(plan["validation"]["work_items"][0]["missing_requirements"]) == {"outcome", "verification"}
     plan = update(api, plan, evidence=[report("outcome", "new-result"), report("verification", "new-check")], status="complete")
+    assert not plan["validation"]["complete"]
+    plan = finish_phase(api, plan)
     assert plan["validation"]["complete"]
     assert len(plan["plan"]["work_items"][0]["evidence"]) == 4
 
