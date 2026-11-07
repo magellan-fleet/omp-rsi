@@ -599,3 +599,53 @@ def test_v1_plan_updates_without_migration_and_can_spawn_v2_successor(api, tmp_p
                                              source="user", reference="user/scope")})
     assert successor["plan"]["schema"] == 2
     assert api({"action": "read", "plan_id": "example"})["plan"] == old["plan"]
+def test_steering_reopens_outcome_and_keeps_prior_evidence_as_history(api):
+    plan = create(api)
+    plan = update(api, plan, evidence=[report("outcome", "old-result"), report("verification", "old-check")], status="complete")
+    original = plan["plan"]["task"]["good"]
+    plan = api({"action": "steer", "plan_id": "example", "revision": plan["revision"],
+                "instruction": "Deliver the changed user outcome", "outcome": "Deliver revised behavior"})
+    assert plan["plan"]["task"]["good"] == original
+    assert plan["validation"]["direction"]["latest_instruction"] == "Deliver the changed user outcome"
+    assert plan["plan"]["work_items"][0]["status"] == "in_progress"
+    assert set(plan["validation"]["work_items"][0]["missing_requirements"]) == {"outcome", "verification"}
+    plan = update(api, plan, evidence=[report("outcome", "new-result"), report("verification", "new-check")], status="complete")
+    assert plan["validation"]["complete"]
+    assert len(plan["plan"]["work_items"][0]["evidence"]) == 4
+
+
+def test_advisory_review_does_not_block_but_specific_blocking_finding_does(api):
+    plan = update(api, create(api), evidence=[report("outcome"), report("verification", "check")])
+    plan = update(api, plan, reviews=[{"evidence_id": "result", "verdict": "concern", "note": "Consider this later"}])
+    assert plan["validation"]["work_items"][0]["ready"]
+    plan = update(api, plan, reviews=[{"evidence_id": "result", "verdict": "concern", "note": "Actual failed behavior", "blocking": True, "basis": "The requested action fails"}])
+    assert plan["validation"]["work_items"][0]["blocking_findings"] == ["result"]
+    with pytest.raises(ContractError, match="cannot complete"):
+        update(api, plan, status="complete")
+
+
+def test_historical_coding_process_is_optional_without_weakening_custom_requirements():
+    from agent_memory.plans import _direction
+    template = {"achievements": [
+        {"id": "ast", "description": "Use AST-aware exploration to map affected symbols before modifying.", "evidence": "inspect"},
+        {"id": "lsp", "description": "Customer-specific requirement", "evidence": "inspect"}], "validation": []}
+    direction = _direction({"task": {"good": "Ship"}, "template": {"template_id": "coding", "content": template}})
+    assert direction["process_requirements"] == ["ast"]
+
+
+def test_steer_reopens_a_completed_v2_timeline(api):
+    plan = create(api)
+    plan = append_event(api, plan, timeline_event("phase-exec", "phase_transition", "planning", "execution"))
+    for step in plan["plan"]["steps"]:
+        step_id = step["id"]
+        plan = append_event(api, plan, timeline_event(f"{step_id}-start", "step_transition", "pending", "in_progress", step_id=step_id))
+        plan = append_event(api, plan, timeline_event(f"{step_id}-done", "step_transition", "in_progress", "complete", step_id=step_id))
+    plan = update(api, plan, evidence=[report(), report("verification", "tests")], status="complete")
+    plan = append_event(api, plan, timeline_event("phase-review", "phase_transition", "execution", "review"))
+    plan = append_event(api, plan, timeline_event("phase-done", "phase_transition", "review", "complete"))
+    plan = api({"action": "steer", "plan_id": plan["plan"]["plan_id"], "revision": plan["revision"],
+                "instruction": "Deliver the revised outcome", "outcome": "Revised result"})
+    assert plan["plan"]["phase"] == "review"
+    assert plan["plan"]["work_items"][0]["status"] == "in_progress"
+    assert plan["validation"]["direction"]["latest_instruction"] == "Deliver the revised outcome"
+    assert not plan["validation"]["complete"]
